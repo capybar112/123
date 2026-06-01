@@ -1,0 +1,163 @@
+# ============================================================
+# ГЛАВА 1. АНАЛИЗ ТАБЛИЧНЫХ ДАННЫХ (Wine Quality Dataset)
+# ============================================================
+
+# Установка библиотек
+!pip install pandas numpy matplotlib seaborn plotly -q
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
+import warnings
+warnings.filterwarnings('ignore')
+
+print("=" * 60)
+print("ГЛАВА 1. АНАЛИЗ ТАБЛИЧНЫХ ДАННЫХ (Wine Quality)")
+print("=" * 60)
+
+# ============================================================
+# 1. ЗАГРУЗКА ДАННЫХ
+# ============================================================
+
+# Скачивание датасета
+!wget -q https://archive.ics.uci.edu/static/public/186/wine+quality.zip
+!unzip -q -o wine+quality.zip
+!unzip -q -o winequality-red.zip
+
+# Загрузка данных
+df = pd.read_csv('winequality-red.csv', sep=';')
+
+print(f"\nРазмер датасета: {df.shape[0]} строк, {df.shape[1]} столбцов")
+print(f"\nПервые 5 строк:")
+print(df.head())
+print(f"\nТипы данных:")
+print(df.dtypes)
+
+# ============================================================
+# 2. УДАЛЕНИЕ ДУБЛИКАТОВ
+# ============================================================
+
+print("\n" + "=" * 60)
+print("УДАЛЕНИЕ ДУБЛИКАТОВ")
+print("=" * 60)
+
+duplicates_before = df.duplicated().sum()
+print(f"Дубликатов до удаления: {duplicates_before} ({duplicates_before/len(df)*100:.2f}%)")
+
+df = df.drop_duplicates()
+print(f"Дубликатов после удаления: {df.duplicated().sum()}")
+print(f"Размер после удаления: {df.shape[0]} строк")
+
+# ============================================================
+# 3. СТАТИСТИЧЕСКИЙ АНАЛИЗ
+# ============================================================
+
+print("\n" + "=" * 60)
+print("СТАТИСТИЧЕСКИЙ АНАЛИЗ")
+print("=" * 60)
+
+print(df.describe().round(3))
+
+# Визуализация распределений
+fig, axes = plt.subplots(3, 4, figsize=(15, 12))
+axes = axes.flatten()
+
+for i, col in enumerate(df.columns):
+    axes[i].hist(df[col], bins=30, color='skyblue', edgecolor='black')
+    axes[i].set_title(col)
+    axes[i].set_xlabel('Значение')
+    axes[i].set_ylabel('Частота')
+
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# 4. КОРРЕЛЯЦИОННЫЙ АНАЛИЗ
+# ============================================================
+
+print("\n" + "=" * 60)
+print("КОРРЕЛЯЦИОННЫЙ АНАЛИЗ")
+print("=" * 60)
+
+corr_matrix = df.corr()
+print("Корреляция с quality:")
+print(corr_matrix['quality'].sort_values(ascending=False).round(3))
+
+plt.figure(figsize=(12, 10))
+sns.heatmap(corr_matrix, annot=True, fmt='.2f', cmap='coolwarm', center=0)
+plt.title('Корреляционная матрица')
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# 5. АНАЛИЗ ВЫБРОСОВ
+# ============================================================
+
+print("\n" + "=" * 60)
+print("АНАЛИЗ ВЫБРОСОВ")
+print("=" * 60)
+
+for col in df.columns:
+    Q1 = df[col].quantile(0.25)
+    Q3 = df[col].quantile(0.75)
+    IQR = Q3 - Q1
+    outliers = df[(df[col] < Q1 - 1.5*IQR) | (df[col] > Q3 + 1.5*IQR)]
+    print(f"{col:20s}: {len(outliers):4d} выбросов ({len(outliers)/len(df)*100:.2f}%)")
+
+plt.figure(figsize=(14, 6))
+sns.boxplot(data=df)
+plt.xticks(rotation=45)
+plt.title('Диаграммы размаха для всех признаков')
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# 6. КАТЕГОРИЗАЦИЯ КАЧЕСТВА
+# ============================================================
+
+print("\n" + "=" * 60)
+print("КАТЕГОРИЗАЦИЯ КАЧЕСТВА")
+print("=" * 60)
+
+def quality_category(score):
+    if score <= 4:
+        return 'Low'
+    elif score <= 6:
+        return 'Medium'
+    else:
+        return 'High'
+
+df['quality_category'] = df['quality'].apply(quality_category)
+
+print("Распределение категорий:")
+print(df['quality_category'].value_counts())
+
+plt.figure(figsize=(8, 5))
+df['quality_category'].value_counts().plot(kind='bar', color=['red', 'orange', 'green'])
+plt.title('Распределение категорий качества')
+plt.xlabel('Категория')
+plt.ylabel('Количество')
+plt.xticks(rotation=0)
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# 7. ВЫВОДЫ
+# ============================================================
+
+print("\n" + "=" * 60)
+print("ВЫВОДЫ ПО ГЛАВЕ 1")
+print("=" * 60)
+print("""
+| Характеристика              | Результат                                   |
+|-----------------------------|---------------------------------------------|
+| Размер датасета             | 1359 строк (после удаления дубликатов)      |
+| Количество признаков        | 11                                          |
+| Дубликаты                   | Удалено 240 (15%)                           |
+| Лучшая корреляция с quality | alcohol (0.48), sulphates (0.25)            |
+| Худшая корреляция           | volatile acidity (-0.39)                    |
+| Баланс классов              | Несбалансирован (Medium доминирует)         |
+""")
+print("\nЗАКЛЮЧЕНИЕ: Датасет требует балансировки классов перед обучением.")
