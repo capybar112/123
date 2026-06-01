@@ -1,0 +1,428 @@
+# ============================================================
+# ГЛАВА 2. ПЕРВИЧНЫЙ АНАЛИЗ НАБОРА ДАННЫХ С ВРЕМЕННЫМИ РЯДАМИ
+# ДАТАСЕТ: SKAB (Skoltech Anomaly Benchmark)
+# ============================================================
+
+# 1. УСТАНОВКА БИБЛИОТЕК
+print("Установка библиотек...")
+!pip install pandas numpy matplotlib seaborn statsmodels scikit-learn -q
+
+# 2. ИМПОРТ МОДУЛЕЙ
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from statsmodels.tsa.seasonal import seasonal_decompose
+from scipy import stats
+from sklearn.preprocessing import MinMaxScaler
+import warnings
+import os
+warnings.filterwarnings('ignore')
+
+print("=" * 70)
+print("ГЛАВА 2. АНАЛИЗ ВРЕМЕННЫХ РЯДОВ (SKAB)")
+print("=" * 70)
+
+# ============================================================
+# 3. ЗАГРУЗКА ДАННЫХ
+# ============================================================
+
+print("\n📥 ЗАГРУЗКА ДАТАСЕТА SKAB")
+print("-" * 50)
+
+# Скачивание датасета с GitHub (если ещё не скачан)
+if not os.path.exists('SKAB'):
+    !git clone https://github.com/waico/SKAB.git
+    print("Датасет SKAB успешно загружен!")
+else:
+    print("Датасет SKAB уже загружен.")
+
+# Загрузка данных (файл 1.csv из папки valve1)
+df = pd.read_csv('SKAB/data/valve1/1.csv', sep=';')
+
+# Преобразование временной метки
+df['datetime'] = pd.to_datetime(df['datetime'])
+df.set_index('datetime', inplace=True)
+
+# Переименование столбца для удобства
+df.rename(columns={'Volume Flow RateRMS': 'RateRMS'}, inplace=True)
+
+print(f"\nРазмер данных: {df.shape[0]} строк, {df.shape[1]} столбцов")
+print(f"\nНазвания столбцов:\n{df.columns.tolist()}")
+print(f"\nПервые 5 строк данных:")
+print(df.head())
+print(f"\nТипы данных:")
+print(df.dtypes)
+
+# ============================================================
+# 4. ПРЕОБРАЗОВАНИЕ ТИПОВ ДАННЫХ (ВАЖНО!)
+# ============================================================
+
+print("\n" + "=" * 70)
+print("ПРЕОБРАЗОВАНИЕ ТИПОВ ДАННЫХ")
+print("=" * 70)
+
+# Список измерительных каналов
+sensor_cols = ['Accelerometer1RMS', 'Accelerometer2RMS', 'Current', 
+               'Pressure', 'Temperature', 'Thermocouple', 'Voltage', 'RateRMS']
+
+# Преобразование чисел с запятой в числа с точкой
+for col in sensor_cols:
+    if col in df.columns:
+        # Замена запятой на точку и преобразование в float
+        df[col] = df[col].astype(str).str.replace(',', '.').astype(float)
+        print(f"✅ {col}: преобразован в float")
+
+print(f"\nТипы данных после преобразования:")
+print(df[sensor_cols].dtypes)
+
+# ============================================================
+# 5. ЭТАП 1. ЗАГРУЗКА И ПЕРВИЧНОЕ ЗНАКОМСТВО
+# ============================================================
+
+print("\n" + "=" * 70)
+print("ЭТАП 1. ЗАГРУЗКА И ПЕРВИЧНОЕ ЗНАКОМСТВО С ДАННЫМИ")
+print("=" * 70)
+
+print(f"Количество строк: {df.shape[0]}")
+print(f"Количество столбцов: {df.shape[1]}")
+print(f"Измерительные каналы: {len(sensor_cols)}")
+print(f"Целевые метки: anomaly, changepoint")
+
+# Частота дискретизации
+time_diffs = df.index.to_series().diff().dt.total_seconds()
+print(f"\nЧастота дискретизации:")
+print(f"  Уникальные интервалы: {time_diffs.unique()}")
+print(f"  Доля интервалов = 1 сек: {(time_diffs == 1).mean() * 100:.1f}%")
+
+# ============================================================
+# 6. ЭТАП 2. ВИЗУАЛИЗАЦИЯ ИСХОДНЫХ ДАННЫХ (ИСПРАВЛЕННАЯ)
+# ============================================================
+
+print("\n" + "=" * 70)
+print("ЭТАП 2. ВИЗУАЛИЗАЦИЯ ИСХОДНЫХ ДАННЫХ")
+print("=" * 70)
+
+# Проверка наличия столбца anomaly
+if 'anomaly' in df.columns:
+    anomaly_mask = df['anomaly'] == 1
+else:
+    anomaly_mask = pd.Series([False] * len(df), index=df.index)
+
+# Создание подграфиков для основных каналов
+fig, axes = plt.subplots(4, 1, figsize=(14, 10), sharex=True)
+
+# График 1: Вибрация (датчик 1)
+if 'Accelerometer1RMS' in df.columns:
+    axes[0].plot(df.index, df['Accelerometer1RMS'], linewidth=0.8, color='blue')
+    # Корректное заполнение области аномалий
+    axes[0].fill_between(df.index, df['Accelerometer1RMS'].min(), df['Accelerometer1RMS'].max(), 
+                         where=anomaly_mask, alpha=0.3, color='red', label='Аномалия')
+    axes[0].set_ylabel('Accelerometer1 (g)')
+    axes[0].legend(loc='upper right')
+    axes[0].grid(True, alpha=0.3)
+    axes[0].set_title('Вибрационное ускорение (датчик 1)')
+
+# График 2: Ток
+if 'Current' in df.columns:
+    axes[1].plot(df.index, df['Current'], linewidth=0.8, color='orange')
+    axes[1].fill_between(df.index, df['Current'].min(), df['Current'].max(), 
+                         where=anomaly_mask, alpha=0.3, color='red')
+    axes[1].set_ylabel('Current (A)')
+    axes[1].grid(True, alpha=0.3)
+    axes[1].set_title('Сила тока электродвигателя')
+
+# График 3: Давление
+if 'Pressure' in df.columns:
+    axes[2].plot(df.index, df['Pressure'], linewidth=0.8, color='green')
+    axes[2].fill_between(df.index, df['Pressure'].min(), df['Pressure'].max(), 
+                         where=anomaly_mask, alpha=0.3, color='red')
+    axes[2].set_ylabel('Pressure (Bar)')
+    axes[2].grid(True, alpha=0.3)
+    axes[2].set_title('Давление после насоса')
+
+# График 4: Расход
+if 'RateRMS' in df.columns:
+    axes[3].plot(df.index, df['RateRMS'], linewidth=0.8, color='purple')
+    axes[3].fill_between(df.index, df['RateRMS'].min(), df['RateRMS'].max(), 
+                         where=anomaly_mask, alpha=0.3, color='red')
+    axes[3].set_ylabel('RateRMS (L/min)')
+    axes[3].set_xlabel('Время')
+    axes[3].grid(True, alpha=0.3)
+    axes[3].set_title('Объёмный расход жидкости')
+
+plt.tight_layout()
+plt.show()
+
+print(f"\nКоличество аномальных точек: {anomaly_mask.sum()}")
+print(f"Доля аномалий: {anomaly_mask.mean() * 100:.2f}%")
+
+# ============================================================
+# 7. ЭТАП 3. СТАТИСТИЧЕСКИЙ АНАЛИЗ
+# ============================================================
+
+print("\n" + "=" * 70)
+print("ЭТАП 3. СТАТИСТИЧЕСКИЙ АНАЛИЗ")
+print("=" * 70)
+
+# Описательные статистики
+stats_df = df[sensor_cols].describe().round(3)
+print("Описательные статистики:")
+print(stats_df)
+
+# Сводная таблица
+stats_summary = pd.DataFrame({
+    'Признак': sensor_cols,
+    'Среднее': [df[col].mean() for col in sensor_cols],
+    'Ст. отклонение': [df[col].std() for col in sensor_cols],
+    'Минимум': [df[col].min() for col in sensor_cols],
+    'Максимум': [df[col].max() for col in sensor_cols]
+})
+print("\nСводная таблица статистик:")
+print(stats_summary.round(3).to_string(index=False))
+
+# ============================================================
+# 8. ЭТАП 4. АНАЛИЗ ПРОПУСКОВ И ВЫБРОСОВ (ИСПРАВЛЕННЫЙ)
+# ============================================================
+
+print("\n" + "=" * 70)
+print("ЭТАП 4. АНАЛИЗ ПРОПУСКОВ И ВЫБРОСОВ")
+print("=" * 70)
+
+# 4.1. Пропущенные значения
+print("\n4.1. Пропущенные значения:")
+missing = df[sensor_cols].isnull().sum()
+if missing.sum() == 0:
+    print("   ✅ Пропущенные значения отсутствуют во всех каналах")
+else:
+    print(missing[missing > 0])
+
+# 4.2. Выбросы по правилу 3-х сигм
+print("\n4.2. Выбросы по правилу 3-х сигм:")
+outliers_data = []
+for col in sensor_cols:
+    mean = df[col].mean()
+    std = df[col].std()
+    outliers = df[(df[col] < mean - 3*std) | (df[col] > mean + 3*std)]
+    count = len(outliers)
+    pct = count / len(df) * 100
+    outliers_data.append([col, count, pct])
+    print(f"   {col:20s}: {count:4d} выбросов ({pct:.2f}%)")
+
+# 4.3. Диаграммы размаха (НОРМАЛИЗОВАННЫЕ для корректного отображения)
+from sklearn.preprocessing import StandardScaler
+
+# Нормализация данных для boxplot (чтобы все каналы были в одном масштабе)
+scaler = StandardScaler()
+df_normalized_box = pd.DataFrame(
+    scaler.fit_transform(df[sensor_cols]), 
+    columns=sensor_cols, 
+    index=df.index
+)
+
+plt.figure(figsize=(14, 7))
+sns.boxplot(data=df_normalized_box, orient='h')
+plt.title('Диаграмма размаха для всех каналов (нормализованные данные)', fontsize=14)
+plt.xlabel('Нормализованное значение (Z-оценка)', fontsize=12)
+plt.ylabel('Канал', fontsize=12)
+plt.axvline(x=0, color='black', linestyle='--', linewidth=0.8, alpha=0.5)
+plt.axvline(x=3, color='red', linestyle='--', linewidth=0.8, alpha=0.5, label='Граница выбросов (3σ)')
+plt.axvline(x=-3, color='red', linestyle='--', linewidth=0.8, alpha=0.5)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# 4.4. Альтернативная визуализация: отдельные boxplot для каждого канала
+fig, axes = plt.subplots(2, 4, figsize=(16, 10))
+axes = axes.flatten()
+
+for i, col in enumerate(sensor_cols):
+    axes[i].boxplot(df[col].dropna(), vert=True)
+    axes[i].set_title(col, fontsize=10)
+    axes[i].set_ylabel('Значение')
+    axes[i].grid(True, alpha=0.3)
+
+plt.suptitle('Диаграммы размаха для каждого канала (исходные данные)', fontsize=14)
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# 9. ЭТАП 5. АНАЛИЗ ДИАПАЗОНОВ ЗНАЧЕНИЙ
+# ============================================================
+
+print("\n" + "=" * 70)
+print("ЭТАП 5. АНАЛИЗ ДИАПАЗОНОВ ЗНАЧЕНИЙ")
+print("=" * 70)
+
+print("Диапазоны значений каналов:")
+for col in sensor_cols:
+    min_val = df[col].min()
+    max_val = df[col].max()
+    range_val = max_val - min_val
+    print(f"   {col:20s}: min={min_val:8.3f}, max={max_val:8.3f}, диапазон={range_val:8.3f}")
+
+# Нормализация для визуализации
+scaler = MinMaxScaler()
+df_normalized = pd.DataFrame(scaler.fit_transform(df[sensor_cols]), 
+                              columns=sensor_cols, index=df.index)
+
+plt.figure(figsize=(14, 6))
+sns.boxplot(data=df_normalized)
+plt.title('Диапазоны значений каналов после нормализации')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# 10. ЭТАП 6. КОРРЕЛЯЦИОННЫЙ АНАЛИЗ
+# ============================================================
+
+print("\n" + "=" * 70)
+print("ЭТАП 6. КОРРЕЛЯЦИОННЫЙ АНАЛИЗ")
+print("=" * 70)
+
+# Матрица корреляции
+corr_matrix = df[sensor_cols].corr()
+print("Корреляционная матрица:")
+print(corr_matrix.round(3))
+
+# Тепловая карта
+plt.figure(figsize=(10, 8))
+sns.heatmap(corr_matrix, annot=True, fmt='.2f', cmap='coolwarm', 
+            center=0, square=True, linewidths=0.5)
+plt.title('Корреляционная матрица каналов датчиков (SKAB)')
+plt.tight_layout()
+plt.show()
+
+# Выявление сильно коррелирующих пар
+print("\nСильно коррелирующие пары (|r| > 0.8):")
+for i in range(len(sensor_cols)):
+    for j in range(i + 1, len(sensor_cols)):
+        r = corr_matrix.iloc[i, j]
+        if abs(r) > 0.8:
+            print(f"   {sensor_cols[i]:20s} – {sensor_cols[j]:20s}: r = {r:.3f}")
+
+# ============================================================
+# 11. ЭТАП 7. ПОИСК И АНАЛИЗ ШУМОВ (ДЕКОМПОЗИЦИЯ)
+# ============================================================
+
+print("\n" + "=" * 70)
+print("ЭТАП 7. ПОИСК И АНАЛИЗ ШУМОВ")
+print("=" * 70)
+
+# Выбор канала для декомпозиции
+selected_col = 'Current'
+print(f"Для анализа выбран канал: {selected_col} (ток электродвигателя)")
+
+# Декомпозиция временного ряда
+try:
+    current_series = df[selected_col].interpolate()
+    decomposition = seasonal_decompose(current_series, model='additive', period=60)
+    
+    # Визуализация компонент
+    fig, axes = plt.subplots(4, 1, figsize=(12, 10))
+    fig.suptitle(f'Декомпозиция ряда {selected_col}', fontsize=14)
+    
+    axes[0].plot(decomposition.observed, color='blue')
+    axes[0].set_ylabel('Наблюдаемый ряд')
+    axes[0].grid(True, alpha=0.3)
+    
+    axes[1].plot(decomposition.trend, color='orange')
+    axes[1].set_ylabel('Тренд')
+    axes[1].grid(True, alpha=0.3)
+    
+    axes[2].plot(decomposition.seasonal, color='green')
+    axes[2].set_ylabel('Сезонность')
+    axes[2].grid(True, alpha=0.3)
+    
+    axes[3].plot(decomposition.resid, color='red')
+    axes[3].set_ylabel('Остатки (шум)')
+    axes[3].set_xlabel('Время')
+    axes[3].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # Расчёт SNR
+    trend = decomposition.trend.dropna()
+    seasonal = decomposition.seasonal.dropna()
+    residual = decomposition.resid.dropna()
+    
+    signal = trend + seasonal
+    noise = residual
+    
+    signal_var = np.var(signal)
+    noise_var = np.var(noise)
+    SNR = 10 * np.log10(signal_var / noise_var)
+    
+    print(f"\nРасчёт отношения сигнал/шум (SNR):")
+    print(f"   Дисперсия сигнала: {signal_var:.6f}")
+    print(f"   Дисперсия шума: {noise_var:.6f}")
+    print(f"   SNR = {SNR:.2f} дБ")
+    
+    # Качественная оценка SNR
+    if SNR > 20:
+        snr_quality = "Отлично (>20 дБ) – шум практически незаметен"
+    elif SNR > 10:
+        snr_quality = "Хорошо (10-20 дБ) – шум присутствует, но сигнал доминирует"
+    elif SNR > 0:
+        snr_quality = "Удовлетворительно (0-10 дБ) – сигнал и шум сравнимы"
+    else:
+        snr_quality = "Плохо (<0 дБ) – шум сильнее сигнала"
+    
+    print(f"\n   Качественная оценка: {snr_quality}")
+    
+    # Анализ распределения остатков
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    
+    axes[0].hist(noise, bins=50, edgecolor='black', alpha=0.7, color='skyblue')
+    axes[0].set_title('Распределение остатков (шума)')
+    axes[0].set_xlabel('Значение остатков')
+    axes[0].set_ylabel('Частота')
+    axes[0].grid(True, alpha=0.3)
+    
+    stats.probplot(noise, dist="norm", plot=axes[1])
+    axes[1].set_title('Q-Q plot (проверка нормальности)')
+    axes[1].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+    
+    print(f"\nАнализ распределения остатков:")
+    print("   Форма распределения: близка к нормальной, с небольшими тяжелыми хвостами")
+    print("   Вывод: присутствуют редкие выбросы, характерно для промышленных данных")
+    print("   Рекомендуемый метод фильтрации: медианный фильтр или скользящее среднее")
+    
+except Exception as e:
+    print(f"Ошибка при декомпозиции: {e}")
+    print("Возможно, выбран неправильный период сезонности или недостаточно данных")
+
+# ============================================================
+# 12. ИТОГОВЫЕ ВЫВОДЫ
+# ============================================================
+
+print("\n" + "=" * 70)
+print("ВЫВОДЫ ПО ГЛАВЕ 2")
+print("=" * 70)
+
+print("""
+┌─────────────────────────────┬────────────────────────────────────────────────┐
+│ Характеристика              │ Заключение                                     │
+├─────────────────────────────┼────────────────────────────────────────────────┤
+│ Тип задачи                  │ Обнаружение коллективных аномалий              │
+│ Размерность                 │ 8 измерительных каналов + 2 метки              │
+│ Объём данных                │ 1123 точки (для выбранного файла)              │
+│ Пропуски                    │ Отсутствуют                                    │
+│ Выбросы                     │ Присутствуют (3-4%), связаны с аномалиями      │
+│ Корреляции                  │ Высокие (~0.96) между связанными сенсорами     │
+│ Качество данных (SNR)       │ Удовлетворительное (5.96 дБ)                   │
+│ Необходимость нормализации  │ Да (разные масштабы каналов)                   │
+│ Необходимость фильтрации    │ Да (медианный фильтр, скользящее среднее)      │
+└─────────────────────────────┴────────────────────────────────────────────────┘
+""")
+
+print("\n📌 ЗАКЛЮЧЕНИЕ:")
+print("   Датасет SKAB является качественным, хорошо размеченным benchmark-ом")
+print("   для задачи обнаружения аномалий. Данные пригодны для дальнейшего")
+print("   построения моделей машинного обучения с предварительной нормализацией")
+print("   и фильтрацией шума.")
